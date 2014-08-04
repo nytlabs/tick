@@ -1,13 +1,10 @@
 package main
 
 import (
-	//"fmt"
-
 	"fmt"
 
 	"github.com/bitly/go-nsq"
 	"github.com/nytlabs/gojsonexplode"
-	//"github.com/nytlabs/gojsonexplode"
 )
 
 func loop(inChan chan *nsq.Message) {
