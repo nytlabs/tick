@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/bitly/go-nsq"
 	"github.com/nytlabs/gojsonexplode"
 )
 
+/*
 func loop(inChan chan *nsq.Message) {
 	i := 0
 	for msg := range inChan {
@@ -18,6 +20,22 @@ func loop(inChan chan *nsq.Message) {
 		i = i + 1
 		fmt.Println(i)
 		msg.Finish()
+	}
+}
+*/
+
+func loop(inChan chan *nsq.Message) {
+	count := 0
+	tick := time.NewTicker(10 * time.Second)
+	for {
+		select {
+		case m := <-inChan:
+			gojsonexplode.Explodejson(m.Body, "||")
+			count++
+			m.Finish()
+		case <-tick.C:
+			fmt.Println(count)
+		}
 	}
 }
 
