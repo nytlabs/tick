@@ -14,7 +14,9 @@ func loop(inChan chan *nsq.Message) {
 	count := 0
 	unmarshaled := make(map[string]interface{})
 	outChan := make(chan string, 1)
-	go insertMap(outChan)
+	for i := 0; i < 10; i++ {
+		go isertMap(outChan)
+	}
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
