@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,19 +10,52 @@ import (
 	"github.com/gocql/gocql"
 )
 
+type response struct {
+	status string
+	data   interface{}
+}
+
 type keys struct {
+	Status string        `json:"status"`
+	Keys   []interface{} `json:"keys"`
+}
+
+type keyCount struct {
+	Count      int64   `json:"count"`
+	Percentage float64 `json:"percentage"`
 }
 
 var session *gocql.Session
 
 func keyDistributionHandler(w http.ResponseWriter, r *http.Request) {
-	var key string
-	var count int64
-	iter := *session.Query(`SELECT key, count FROM et_totals`).Iter()
-	for iter.Scan(&key, &count) {
-		//fmt.Fprintf(w, key+" : "+count+"<br/>")
-		fmt.Fprintf(w, "%s : %d\n", key, count)
+	var k, typ string
+	var c, total int64
+	var kl []interface{}
+	var resp keys
+	e := session.Query(`SELECT type, count FROM event_count where type=?`, "event_tracker").Consistency(gocql.One).Scan(&typ, &total)
+	if e != nil {
+		log.Println(e)
+		return
 	}
+	fmt.Println(total)
+	iter := *session.Query(`SELECT key, count FROM et_totals`).Iter()
+	for iter.Scan(&k, &c) {
+		p := float64(c) * 100 / float64(total)
+		ctp := keyCount{c, p}
+		elem := make(map[string]keyCount)
+		elem[k] = ctp
+		kl = append(kl, elem)
+	}
+	resp.Status = "200"
+	resp.Keys = kl
+	b, err := json.Marshal(resp)
+	if err != nil {
+		log.Println(err)
+		fmt.Fprintf(w, "Error")
+	} else {
+		fmt.Fprintf(w, string(b[:]))
+	}
+
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +68,7 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/keydistribution", keyDistributionHandler)
-	cluster := gocql.NewCluster("localhost:49171")
+	cluster := gocql.NewCluster("localhost:49176")
 	cluster.Keyspace = "distribution"
 	session, err = cluster.CreateSession()
 	if err != nil {
