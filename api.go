@@ -59,7 +59,7 @@ func keyDistributionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello World!")
+	fmt.Fprintf(w, "नमस्ते जगत!")
 }
 
 func main() {
@@ -68,7 +68,7 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/keydistribution", keyDistributionHandler)
-	cluster := gocql.NewCluster("localhost:49176")
+	cluster := gocql.NewCluster("localhost:49156")
 	cluster.Keyspace = "distribution"
 	session, err = cluster.CreateSession()
 	if err != nil {
@@ -76,5 +76,5 @@ func main() {
 	}
 	defer session.Close()
 
-	http.ListenAndServe(":9000", nil)
+	http.ListenAndServe(":8888", nil)
 }
