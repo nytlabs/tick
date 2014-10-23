@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/bitly/go-nsq"
@@ -12,13 +13,14 @@ import (
 )
 
 var cluster *gocql.ClusterConfig
+var session *gocql.Session
 
 func loop(inChan chan *nsq.Message) {
 	count := 0
 	unmarshaled := make(map[string]interface{})
 	outChan := make(chan string, 1)
 	countChan := make(chan string, 1)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		go insertMap(outChan)
 	}
 	go insertTotal(countChan)
@@ -50,11 +52,13 @@ func loop(inChan chan *nsq.Message) {
 }
 
 func insertMap(inChan chan string) {
-	session, err := cluster.CreateSession()
-	if err != nil {
-		log.Println(err)
-	}
-	defer session.Close()
+	/*
+		session, err := cluster.CreateSession()
+		if err != nil {
+			log.Println(err)
+		}
+		defer session.Close()
+	*/
 	for {
 		select {
 		case m := <-inChan:
@@ -68,36 +72,51 @@ func insertMap(inChan chan string) {
 }
 
 func insertTotal(inChan chan string) {
-	session, err := cluster.CreateSession()
-	if err != nil {
-		log.Println(err)
-	}
-	defer session.Close()
+	/*
+		session, err := cluster.CreateSession()
+		if err != nil {
+			log.Println(err)
+		}
+		defer session.Close()
+	*/
 	for {
 		select {
 		case m := <-inChan:
-			err = session.Query("UPDATE event_count set count=count+1 WHERE type=?", m).Exec()
+			err := session.Query("UPDATE event_count set count=count+1 WHERE type=?", m).Exec()
 			if err != nil {
 				log.Println(err)
+				log.Println("Error here?")
 			}
 		}
 	}
 }
 
+func insertToTimeSeries(inchan chan map[string]interface{}) {
+
+}
+
 func main() {
 	var reader *nsq.Consumer
 	var err error
-	//runtime.GOMAXPROCS(runtime.NumCPU())
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	inChan := make(chan *nsq.Message, 1)
 	lookup := "localhost:4161"
+	//lookup := "ec2-50-17-119-19.compute-1.amazonaws.com:4161"
 	conf := nsq.NewConfig()
 	conf.Set("maxInFlight", 1000)
-	cluster = gocql.NewCluster("localhost:49176")
+	cluster = gocql.NewCluster("localhost:49156")
 	cluster.Keyspace = "distribution"
-	cluster.Consistency = gocql.Quorum
+	cluster.Consistency = gocql.One
+	session, err = cluster.CreateSession()
+	if err != nil {
+		log.Println(err)
+		log.Println("why?")
+	}
+	//defer session.Close()
 	reader, err = nsq.NewConsumer("page", "tick#ephemeral", conf)
 	if err != nil {
 		log.Println(err)
+		log.Println("why")
 	}
 	reader.AddHandler(nsq.HandlerFunc(func(m *nsq.Message) error {
 		inChan <- m
@@ -107,7 +126,7 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
-	go loop(inChan)
+	loop(inChan)
 	<-reader.StopChan
-	//session.Close()
+	session.Close()
 }
