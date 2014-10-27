@@ -18,12 +18,14 @@ var session *gocql.Session
 func loop(inChan chan *nsq.Message) {
 	count := 0
 	unmarshaled := make(map[string]interface{})
-	outChan := make(chan string, 1)
-	countChan := make(chan string, 1)
-	for i := 0; i < 5; i++ {
-		go insertMap(outChan)
-	}
+	outChan := make(chan string, 100)
+	countChan := make(chan string, 100)
+	//for i := 0; i < 50; i++ {
+	go insertMap(outChan)
+	//}
+	//for i := 0; i < 10; i++ {
 	go insertTotal(countChan)
+	//}
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
@@ -51,43 +53,54 @@ func loop(inChan chan *nsq.Message) {
 	}
 }
 
+func insertdata(string) {
+}
+
 func insertMap(inChan chan string) {
-	/*
-		session, err := cluster.CreateSession()
-		if err != nil {
-			log.Println(err)
-		}
-		defer session.Close()
-	*/
+	tick := time.NewTicker(10 * time.Second)
+	var insertmap map[string]int
+	insertmap = make(map[string]int)
 	for {
 		select {
 		case m := <-inChan:
-			err := session.Query("UPDATE et_totals set count=count+1 WHERE key=?", m).Exec()
-			if err != nil {
-				log.Println(m + " : Is the EOF here?")
-				log.Println(err)
+			insertmap[m] = insertmap[m] + 1
+		case <-tick.C:
+			//loop through map and insert data here
+			for k, v := range insertmap {
+				err := session.Query("UPDATE et_totals set count=count+? WHERE key=?", v, k).Exec()
+				if err != nil {
+					log.Println(k + " : Is the EOF here?")
+					log.Println(err)
+				} else {
+					delete(insertmap, k)
+				}
 			}
 		}
+
 	}
 }
 
 func insertTotal(inChan chan string) {
-	/*
-		session, err := cluster.CreateSession()
-		if err != nil {
-			log.Println(err)
-		}
-		defer session.Close()
-	*/
+	tick := time.NewTicker(10 * time.Second)
+	var insertmap map[string]int
+	insertmap = make(map[string]int)
 	for {
 		select {
 		case m := <-inChan:
-			err := session.Query("UPDATE event_count set count=count+1 WHERE type=?", m).Exec()
-			if err != nil {
-				log.Println(err)
-				log.Println("Error here?")
+			insertmap[m] = insertmap[m] + 1
+		case <-tick.C:
+			//loop through map and insert data here
+			for k, v := range insertmap {
+				err := session.Query("UPDATE event_count set count=count+? WHERE type=?", v, k).Exec()
+				if err != nil {
+					log.Println(k + " : Is the EOF here?")
+					log.Println(err)
+				} else {
+					delete(insertmap, k)
+				}
 			}
 		}
+
 	}
 }
 
@@ -99,12 +112,12 @@ func main() {
 	var reader *nsq.Consumer
 	var err error
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	inChan := make(chan *nsq.Message, 1)
-	lookup := "localhost:4161"
+	inChan := make(chan *nsq.Message, 100)
+	lookup := "10.238.154.138:4150"
 	//lookup := "ec2-50-17-119-19.compute-1.amazonaws.com:4161"
 	conf := nsq.NewConfig()
 	conf.Set("maxInFlight", 1000)
-	cluster = gocql.NewCluster("localhost:49156")
+	cluster = gocql.NewCluster("10.152.146.16")
 	cluster.Keyspace = "distribution"
 	cluster.Consistency = gocql.One
 	session, err = cluster.CreateSession()
@@ -112,7 +125,7 @@ func main() {
 		log.Println(err)
 		log.Println("why?")
 	}
-	//defer session.Close()
+	defer session.Close()
 	reader, err = nsq.NewConsumer("page", "tick#ephemeral", conf)
 	if err != nil {
 		log.Println(err)
@@ -122,11 +135,11 @@ func main() {
 		inChan <- m
 		return nil
 	}))
-	err = reader.ConnectToNSQLookupd(lookup)
+	err = reader.ConnectToNSQD(lookup)
 	if err != nil {
 		log.Println(err)
 	}
 	loop(inChan)
 	<-reader.StopChan
-	session.Close()
+	//session.Close()
 }

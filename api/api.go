@@ -68,7 +68,7 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/keydistribution", keyDistributionHandler)
-	cluster := gocql.NewCluster("localhost:49156")
+	cluster := gocql.NewCluster("tickdb")
 	cluster.Keyspace = "distribution"
 	session, err = cluster.CreateSession()
 	if err != nil {
