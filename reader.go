@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/bitly/go-nsq"
@@ -24,7 +25,7 @@ func loop(inChan chan *nsq.Message) {
 	countChan := make(chan string, 100)
 	tsChan := make(chan struct {
 		k string
-		v string
+		v interface{}
 	}, 100)
 	go insertMap(outChan)
 	go insertTotal(countChan)
@@ -48,7 +49,7 @@ func loop(inChan chan *nsq.Message) {
 				outChan <- k
 				tsChan <- struct {
 					k string
-					v string
+					v interface{}
 				}{k, v}
 			}
 
@@ -62,27 +63,61 @@ func loop(inChan chan *nsq.Message) {
 
 func insertData(inChan chan struct {
 	k string
-	v string
+	v interface{}
 }) {
 
 	tick := time.NewTicker(30 * time.Second)
-	var insertmap map[string]int
-	insertmap = make(map[string]int)
+	var insertmap map[string]map[string]int
+	insertmap = make(map[string]map[string]int)
 	for {
+		var val string
 		select {
 		case m := <-inChan:
-			insertmap[m] = insertmap[m] + 1
+			//fmt.Println(m.k, m.v)
+			switch j := m.v.(type) {
+			case bool:
+				val = strconv.FormatBool(j)
+			case int:
+				val = strconv.Itoa(j)
+			case float64:
+				val = strconv.FormatFloat(j, 'f', 2, 64)
+			case string:
+				val = j
+			default:
+				log.Println("WTF did I get?")
+				fmt.Println(j)
+				//do not worry about this
+			}
+
+			_, ok := insertmap[m.k][val]
+			if !ok {
+				innermap := make(map[string]int)
+				innermap[val] = 1
+				insertmap[m.k] = innermap
+			} else {
+				insertmap[m.k][val] = insertmap[m.k][val] + 1
+			}
+
 		case <-tick.C:
 			//loop through map and insert data here
-			for k, v := range insertmap {
-				err := session.Query("UPDATE dist_over_time set count=count+? and event_time=? WHERE attr_name=? AND attr_val=?", c, t, k).Exec()
-				if err != nil {
-					log.Println(k + " : Is the EOF here?")
-					log.Println(err)
-				} else {
-					delete(insertmap, k)
+			for k, values := range insertmap {
+				//fmt.Println(k, values)
+				for v, c := range values {
+					//get current minute
+					now := time.Now()
+					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+
+					err := session.Query("UPDATE "+k+" set count=count+? WHERE event_time=? AND key=?", c, t, v).Exec()
+					if err != nil {
+						log.Println(k + " : Is the EOF here?")
+						log.Println(err)
+					} else {
+						delete(values, v)
+					}
 				}
+				delete(insertmap, k)
 			}
+
 		}
 
 	}
@@ -112,8 +147,34 @@ func insertTotal(inChan chan string) {
 	}
 }
 
-func insertToTimeSeries(inchan chan map[string]interface{}) {
+func insertMap(inChan chan string) {
+	tick := time.NewTicker(10 * time.Second)
+	var insertmap map[string]int
+	insertmap = make(map[string]int)
+	for {
+		select {
+		case m := <-inChan:
+			insertmap[m] = insertmap[m] + 1
+		case <-tick.C:
+			//loop through map and insert data here
+			for k, v := range insertmap {
+				// get current minute
+				err := session.Query("UPDATE distribution set count=count+? WHERE key=?", v, k).Exec()
+				if err != nil {
+					log.Println(err)
+				} else {
+					delete(insertmap, k)
+					//fmt.Println("Creating Table: " + k)
+					err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
+					if err != nil {
+						log.Println("Could Not create table: " + k)
+						log.Println(err)
+					}
+				}
+			}
+		}
 
+	}
 }
 
 func main() {

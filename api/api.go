@@ -32,13 +32,13 @@ func keyDistributionHandler(w http.ResponseWriter, r *http.Request) {
 	var c, total int64
 	var kl []interface{}
 	var resp keys
-	e := session.Query(`SELECT type, count FROM event_count where type=?`, "event_tracker").Consistency(gocql.One).Scan(&typ, &total)
+	e := session.Query(`SELECT type, count FROM total_events where type=?`, "event_tracker").Consistency(gocql.One).Scan(&typ, &total)
 	if e != nil {
 		log.Println(e)
 		return
 	}
 	fmt.Println(total)
-	iter := *session.Query(`SELECT key, count FROM et_totals`).Iter()
+	iter := *session.Query(`SELECT key, count FROM distribution`).Iter()
 	for iter.Scan(&k, &c) {
 		p := float64(c) * 100 / float64(total)
 		ctp := keyCount{c, p}
