@@ -7,6 +7,7 @@ import (
 	"log"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bitly/go-nsq"
@@ -17,6 +18,7 @@ import (
 var cluster *gocql.ClusterConfig
 var session *gocql.Session
 var stream *string
+var keymap map[string]bool
 
 func loop(inChan chan *nsq.Message) {
 	count := 0
@@ -34,7 +36,7 @@ func loop(inChan chan *nsq.Message) {
 	for {
 		select {
 		case m := <-inChan:
-			exploded, err := gojsonexplode.Explodejson(m.Body, ".")
+			exploded, err := gojsonexplode.Explodejson(m.Body, "_")
 			if err != nil {
 				log.Println(err)
 				continue
@@ -46,17 +48,19 @@ func loop(inChan chan *nsq.Message) {
 				continue
 			}
 			for k, v := range unmarshaled {
-				outChan <- k
-				tsChan <- struct {
-					k string
-					v interface{}
-				}{k, v}
+				if !strings.ContainsAny(k, "  .") {
+					outChan <- k
+					tsChan <- struct {
+						k string
+						v interface{}
+					}{k, v}
+				}
 			}
 
 			count++
 			m.Finish()
 		case <-tick.C:
-			fmt.Printf("inserted %d events\n", count)
+			fmt.Printf("read %d events\n", count)
 		}
 	}
 }
@@ -66,11 +70,11 @@ func insertData(inChan chan struct {
 	v interface{}
 }) {
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(60 * time.Second)
 	var insertmap map[string]map[string]int
 	insertmap = make(map[string]map[string]int)
 	for {
-		var val string
+		val := ""
 		select {
 		case m := <-inChan:
 			//fmt.Println(m.k, m.v)
@@ -84,19 +88,19 @@ func insertData(inChan chan struct {
 			case string:
 				val = j
 			default:
-				log.Println("WTF did I get?")
-				fmt.Println(j)
 				//do not worry about this
 			}
 			var ok bool
-			_, ok = insertmap[m.k]
-			if !ok {
-				innermap := make(map[string]int)
-				innermap[val] = 1
-				insertmap[m.k] = innermap
-			} else {
-				insertmap[m.k][val] = insertmap[m.k][val] + 1
+			if val != "" {
+				_, ok = insertmap[m.k]
+				if !ok {
+					innermap := make(map[string]int)
+					innermap[val] = 1
+					insertmap[m.k] = innermap
+				} else {
+					insertmap[m.k][val] = insertmap[m.k][val] + 1
 
+				}
 			}
 
 		case <-tick.C:
@@ -108,7 +112,7 @@ func insertData(inChan chan struct {
 					now := time.Now()
 					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
 
-					err := session.Query("UPDATE "+k+" set count=count+? WHERE event_time=? AND key=?", c, t, v).Exec()
+					err := session.Query("UPDATE tick."+k+" set count=count+? WHERE event_time=? AND key=?", c, t, v).Exec()
 					if err != nil {
 						log.Println(k + " : Is the EOF here?")
 						log.Println(err)
@@ -118,6 +122,7 @@ func insertData(inChan chan struct {
 				}
 				delete(insertmap, k)
 			}
+			fmt.Println("looped through a bunch of keys")
 
 		}
 
@@ -135,7 +140,7 @@ func insertTotal(inChan chan string) {
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, v := range insertmap {
-				err := session.Query("UPDATE total_events set count=count+? WHERE type=?", v, k).Exec()
+				err := session.Query("UPDATE tick.total_events set count=count+? WHERE type=?", v, k).Exec()
 				if err != nil {
 					log.Println(k + " : Is the EOF here?")
 					log.Println(err)
@@ -160,16 +165,21 @@ func insertMap(inChan chan string) {
 			//loop through map and insert data here
 			for k, v := range insertmap {
 				// get current minute
-				err := session.Query("UPDATE distribution set count=count+? WHERE key=?", v, k).Exec()
+				err := session.Query("UPDATE tick.distribution set count=count+? WHERE key=?", v, k).Exec()
 				if err != nil {
 					log.Println(err)
 				} else {
 					delete(insertmap, k)
-					//fmt.Println("Creating Table: " + k)
-					err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
-					if err != nil {
-						log.Println("Could Not create table: " + k)
-						log.Println(err)
+
+					_, exists := keymap[k]
+					if !exists {
+						keymap[k] = true
+						fmt.Println("Creating Table: " + k)
+						err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
+						if err != nil {
+							log.Println("Could Not create table: " + k)
+							log.Println(err)
+						}
 					}
 				}
 			}
@@ -193,6 +203,7 @@ func main() {
 	if *ephemeral {
 		*channel = *channel + "#ephemeral"
 	}
+	keymap = make(map[string]bool)
 
 	inChan := make(chan *nsq.Message, 1000)
 	lookup := "10.238.154.138:4150"
@@ -203,6 +214,8 @@ func main() {
 	cluster = gocql.NewCluster("10.152.146.16")
 	cluster.Keyspace = "tick"
 	cluster.Consistency = gocql.One
+	cluster.Timeout = 1 * time.Second
+	cluster.NumConns = 1
 	session, err = cluster.CreateSession()
 	if err != nil {
 		log.Println(err)
