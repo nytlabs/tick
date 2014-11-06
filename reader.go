@@ -66,7 +66,7 @@ func insertData(inChan chan struct {
 	v interface{}
 }) {
 
-	tick := time.NewTicker(30 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	var insertmap map[string]map[string]int
 	insertmap = make(map[string]map[string]int)
 	for {
@@ -88,20 +88,21 @@ func insertData(inChan chan struct {
 				fmt.Println(j)
 				//do not worry about this
 			}
-
-			_, ok := insertmap[m.k][val]
+			var ok bool
+			_, ok = insertmap[m.k]
 			if !ok {
 				innermap := make(map[string]int)
 				innermap[val] = 1
 				insertmap[m.k] = innermap
 			} else {
 				insertmap[m.k][val] = insertmap[m.k][val] + 1
+
 			}
 
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, values := range insertmap {
-				//fmt.Println(k, values)
+				//fmt.Println(k, "=>", values)
 				for v, c := range values {
 					//get current minute
 					now := time.Now()
