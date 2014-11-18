@@ -31,8 +31,10 @@ func loop(inChan chan *nsq.Message) {
 	}, 100)
 	go insertMap(outChan)
 	go insertTotal(countChan)
-	go insertData(tsChan)
-	tick := time.NewTicker(30 * time.Second)
+	for i := 0; i < 3; i++ {
+		go insertData(tsChan)
+	}
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case m := <-inChan:
@@ -70,9 +72,12 @@ func insertData(inChan chan struct {
 	v interface{}
 }) {
 
-	tick := time.NewTicker(60 * time.Second)
-	var insertmap map[string]map[string]int
-	insertmap = make(map[string]map[string]int)
+	//tick := time.NewTicker(10 * time.Second)
+	//var insertmap map[string]map[string]int
+	//insertmap = make(map[string]map[string]int)
+	batch := gocql.NewBatch(gocql.CounterBatch)
+	stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?"
+	count := 0
 	for {
 		val := ""
 		select {
@@ -90,40 +95,66 @@ func insertData(inChan chan struct {
 			default:
 				//do not worry about this
 			}
-			var ok bool
-			if val != "" {
-				_, ok = insertmap[m.k]
-				if !ok {
-					innermap := make(map[string]int)
-					innermap[val] = 1
-					insertmap[m.k] = innermap
-				} else {
-					insertmap[m.k][val] = insertmap[m.k][val] + 1
-
-				}
-			}
-
-		case <-tick.C:
-			//loop through map and insert data here
-			for k, values := range insertmap {
-				//fmt.Println(k, "=>", values)
-				for v, c := range values {
-					//get current minute
-					now := time.Now()
-					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
-
-					err := session.Query("UPDATE tick."+k+" set count=count+? WHERE event_time=? AND key=?", c, t, v).Exec()
-					if err != nil {
-						log.Println(k + " : Is the EOF here?")
-						log.Println(err)
+			/*
+				var ok bool
+				if val != "" {
+					_, ok = insertmap[m.k]
+					if !ok {
+						innermap := make(map[string]int)
+						innermap[val] = 1
+						insertmap[m.k] = innermap
 					} else {
-						delete(values, v)
+						insertmap[m.k][val] = insertmap[m.k][val] + 1
+
 					}
 				}
-				delete(insertmap, k)
+			*/
+			now := time.Now()
+			t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+			batch.Query(stmt, 1, t, m.k, val)
+			count += 1
+			if count == gocql.BatchSizeMaximum-1 {
+				err := session.ExecuteBatch(batch)
+				if err != nil {
+					log.Println(err)
+				}
+				log.Println("Inserted batch")
+				count = 0
+				batch = gocql.NewBatch(gocql.CounterBatch)
 			}
-			fmt.Println("looped through a bunch of keys")
+			/*
+				case <-tick.C:
+					/*
+							//loop through map and insert data here
+							for k, values := range insertmap {
+								//fmt.Println(k, "=>", values)
+								for v, c := range values {
+									//get current minute
+									now := time.Now()
+									t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+									//fmt.Println("Inserting" + k + " : " + v + " : " + strconv.Itoa(c))
+									batch := gocql.NewBatch(gocql.LoggedBatch)
+									stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?"
+									for i := 0; i < 1000; i++ {
+									}
 
+									err := session.Query("UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?", c, t, k, v).Exec()
+									if err != nil {
+										log.Println(k + " : Is the EOF here?")
+										log.Println(err)
+									} else {
+										delete(values, v)
+									}
+								}
+								delete(insertmap, k)
+							}
+						err := session.ExecuteBatch(batch)
+						if err != nil {
+							fmt.Println(err)
+						}
+
+					fmt.Println("looped through a bunch of keys")
+			*/
 		}
 
 	}
@@ -170,17 +201,18 @@ func insertMap(inChan chan string) {
 					log.Println(err)
 				} else {
 					delete(insertmap, k)
-
-					_, exists := keymap[k]
-					if !exists {
-						keymap[k] = true
-						fmt.Println("Creating Table: " + k)
-						err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
-						if err != nil {
-							log.Println("Could Not create table: " + k)
-							log.Println(err)
+					/*
+						_, exists := keymap[k]
+						if !exists {
+							keymap[k] = true
+							fmt.Println("Creating Table: " + k)
+							err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
+							if err != nil {
+								log.Println("Could Not create table: " + k)
+								log.Println(err)
+							}
 						}
-					}
+					*/
 				}
 			}
 		}
