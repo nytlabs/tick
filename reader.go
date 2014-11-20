@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
+	//"fmt"
 	"log"
 	"runtime"
 	"strconv"
@@ -25,15 +25,15 @@ func loop(inChan chan *nsq.Message) {
 	unmarshaled := make(map[string]interface{})
 	outChan := make(chan string, 100)
 	countChan := make(chan string, 100)
-	tsChan := make(chan struct {
+	/*tsChan := make(chan struct {
 		k string
 		v interface{}
-	}, 100)
+	}, 100)*/
 	go insertMap(outChan)
 	go insertTotal(countChan)
-	for i := 0; i < 3; i++ {
-		go insertData(tsChan)
-	}
+	//for i := 0; i < 3; i++ {
+	//go insertData(tsChan)
+	//}
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
@@ -49,20 +49,22 @@ func loop(inChan chan *nsq.Message) {
 				log.Println(err)
 				continue
 			}
-			for k, v := range unmarshaled {
+			for k, _ := range unmarshaled {
 				if !strings.ContainsAny(k, "  .") {
 					outChan <- k
-					tsChan <- struct {
-						k string
-						v interface{}
-					}{k, v}
+					/*
+						tsChan <- struct {
+							k string
+							v interface{}
+						}{k, v}
+					*/
 				}
 			}
 
 			count++
 			m.Finish()
 		case <-tick.C:
-			fmt.Printf("read %d events\n", count)
+			log.Printf("read %d events\n", count)
 		}
 	}
 }
@@ -95,71 +97,50 @@ func insertData(inChan chan struct {
 			default:
 				//do not worry about this
 			}
-			/*
-				var ok bool
-				if val != "" {
-					_, ok = insertmap[m.k]
-					if !ok {
-						innermap := make(map[string]int)
-						innermap[val] = 1
-						insertmap[m.k] = innermap
-					} else {
-						insertmap[m.k][val] = insertmap[m.k][val] + 1
-
-					}
-				}
-			*/
 			now := time.Now()
 			t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
 			batch.Query(stmt, 1, t, m.k, val)
 			count += 1
-			if count == gocql.BatchSizeMaximum-1 {
+			if count >= 10000 {
 				err := session.ExecuteBatch(batch)
 				if err != nil {
 					log.Println(err)
 				}
-				log.Println("Inserted batch")
+				//log.Println("Inserted batch")
+				//log.Println(count)
 				count = 0
 				batch = gocql.NewBatch(gocql.CounterBatch)
 			}
-			/*
-				case <-tick.C:
-					/*
-							//loop through map and insert data here
-							for k, values := range insertmap {
-								//fmt.Println(k, "=>", values)
-								for v, c := range values {
-									//get current minute
-									now := time.Now()
-									t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
-									//fmt.Println("Inserting" + k + " : " + v + " : " + strconv.Itoa(c))
-									batch := gocql.NewBatch(gocql.LoggedBatch)
-									stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?"
-									for i := 0; i < 1000; i++ {
-									}
-
-									err := session.Query("UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?", c, t, k, v).Exec()
-									if err != nil {
-										log.Println(k + " : Is the EOF here?")
-										log.Println(err)
-									} else {
-										delete(values, v)
-									}
-								}
-								delete(insertmap, k)
-							}
-						err := session.ExecuteBatch(batch)
-						if err != nil {
-							fmt.Println(err)
-						}
-
-					fmt.Println("looped through a bunch of keys")
-			*/
 		}
 
 	}
 }
 
+/*
+func batchData(inChan chan struct {
+	k string
+	v string
+}) {
+	insertmap := make(map[string]map[string]int)
+	count := 0
+	select {
+	case m := <-inChan:
+		_, ok := insertmap[m.k]
+		if !ok {
+			innermap := make(map[string]int)
+			innermap[m.v] = 1
+			insertmap[m.k] = innermap
+		} else {
+			insertmap[m.k][val] = insertmap[m.k][m.v] + 1
+		}
+		count += 1
+		if count >= 100 {
+			batchChan <- insertmap
+			insertmap = make(map[string]map[string]int)
+		}
+	}
+}
+*/
 func insertTotal(inChan chan string) {
 	tick := time.NewTicker(30 * time.Second)
 	var insertmap map[string]int
@@ -201,18 +182,6 @@ func insertMap(inChan chan string) {
 					log.Println(err)
 				} else {
 					delete(insertmap, k)
-					/*
-						_, exists := keymap[k]
-						if !exists {
-							keymap[k] = true
-							fmt.Println("Creating Table: " + k)
-							err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
-							if err != nil {
-								log.Println("Could Not create table: " + k)
-								log.Println(err)
-							}
-						}
-					*/
 				}
 			}
 		}
@@ -247,7 +216,7 @@ func main() {
 	cluster.Keyspace = "tick"
 	cluster.Consistency = gocql.One
 	cluster.Timeout = 1 * time.Second
-	cluster.NumConns = 1
+	cluster.NumConns = 10
 	session, err = cluster.CreateSession()
 	if err != nil {
 		log.Println(err)
