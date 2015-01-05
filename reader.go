@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
+	//"fmt"
 	"log"
 	"runtime"
 	"strconv"
@@ -70,7 +70,7 @@ func insertData(inChan chan struct {
 	v interface{}
 }) {
 
-	tick := time.NewTicker(5000 * time.Millisecond)
+	//tick := time.NewTicker(5000 * time.Millisecond)
 	var insertmap map[string]map[string]int
 	insertmap = make(map[string]map[string]int)
 	//count := 0
@@ -104,60 +104,11 @@ func insertData(inChan chan struct {
 
 				}
 			}
-
-		case <-tick.C:
-			//loop through map and insert data here
-			batch := gocql.NewBatch(gocql.UnloggedBatch)
-			stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND attr_name=? AND attr_value=?"
-			count := 0
-			for k, values := range insertmap {
-				//fmt.Println(k, "=>", values)
-				for v, c := range values {
-					//get current minute
-					now := time.Now()
-					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
-					batch.Query(stmt, c, t, k, v)
-					count += 1
-					delete(values, v)
-				}
-				delete(insertmap, k)
-			}
-			err := session.ExecuteBatch(batch)
-			fmt.Println(count)
-			if err != nil {
-				log.Println(err)
-			}
-
 		}
 
 	}
 }
 
-/*
-func batchData(inChan chan struct {
-	k string
-	v string
-}) {
-	insertmap := make(map[string]map[string]int)
-	count := 0
-	select {
-	case m := <-inChan:
-		_, ok := insertmap[m.k]
-		if !ok {
-			innermap := make(map[string]int)
-			innermap[m.v] = 1
-			insertmap[m.k] = innermap
-		} else {
-			insertmap[m.k][val] = insertmap[m.k][m.v] + 1
-		}
-		count += 1
-		if count >= 100 {
-			batchChan <- insertmap
-			insertmap = make(map[string]map[string]int)
-		}
-	}
-}
-*/
 func insertTotal(inChan chan string) {
 	tick := time.NewTicker(10 * time.Second)
 	var insertmap map[string]int
