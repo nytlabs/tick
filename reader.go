@@ -5,6 +5,7 @@ import (
 	"flag"
 	//"fmt"
 	"log"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,16 +21,28 @@ var session *gocql.Session
 var stream *string
 var keymap map[string]bool
 
+type distMsg struct {
+	key string
+	typ string
+}
+
+type distCount struct {
+	count      int
+	typ_number int
+	typ_bool   int
+	typ_string int
+}
+
 func loop(inChan chan *nsq.Message) {
 	count := 0
 	unmarshaled := make(map[string]interface{})
-	outChan := make(chan string, 1000)
+	distChan := make(chan distMsg, 1000)
 	countChan := make(chan string, 1000)
 	tsChan := make(chan struct {
 		k string
 		v interface{}
-	}, 65535)
-	go insertMap(outChan)
+	})
+	go updateDistribution(distChan)
 	go insertTotal(countChan)
 	go insertData(tsChan)
 	tick := time.NewTicker(10 * time.Second)
@@ -49,14 +62,15 @@ func loop(inChan chan *nsq.Message) {
 			}
 			for k, v := range unmarshaled {
 				if !strings.ContainsAny(k, "  .") {
-					outChan <- k
+					//fmt.Println(reflect.TypeOf(v).Name())
+					distChan <- distMsg{k, reflect.TypeOf(v).Name()}
 					tsChan <- struct {
 						k string
 						v interface{}
 					}{k, v}
 				}
-			}
 
+			}
 			count++
 			m.Finish()
 		case <-tick.C:
@@ -133,19 +147,42 @@ func insertTotal(inChan chan string) {
 	}
 }
 
-func insertMap(inChan chan string) {
+func updateDistribution(inChan chan distMsg) {
 	tick := time.NewTicker(10 * time.Second)
-	var insertmap map[string]int
-	insertmap = make(map[string]int)
+	var insertmap map[string]distCount
+	insertmap = make(map[string]distCount)
 	for {
 		select {
 		case m := <-inChan:
-			insertmap[m] = insertmap[m] + 1
+			_, ok := insertmap[m.key]
+			if !ok {
+				switch m.typ {
+				case "string":
+					insertmap[m.key] = distCount{1, 0, 0, 1}
+				case "bool":
+					insertmap[m.key] = distCount{1, 0, 1, 0}
+				case "float64":
+					insertmap[m.key] = distCount{1, 1, 0, 0}
+				default:
+					insertmap[m.key] = distCount{1, 0, 0, 0}
+				}
+			} else {
+				switch m.typ {
+				case "string":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool, insertmap[m.key].typ_string + 1}
+				case "bool":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool + 1, insertmap[m.key].typ_string}
+				case "float64":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number + 1, insertmap[m.key].typ_bool, insertmap[m.key].typ_string}
+				default:
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool, insertmap[m.key].typ_string}
+				}
+			}
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, v := range insertmap {
 				// get current minute
-				err := session.Query("UPDATE tick.distribution set count=count+? WHERE key=?", v, k).Exec()
+				err := session.Query("UPDATE tick.distribution set count=count+?, typ_bool_count=typ_bool_count+?, typ_str_count=typ_str_count+?, typ_num_count=typ_num_count+? WHERE key=?", v.count, v.typ_bool, v.typ_string, v.typ_number, k).Exec()
 				if err != nil {
 					log.Println(err)
 				} else {
@@ -175,13 +212,15 @@ func main() {
 	keymap = make(map[string]bool)
 
 	inChan := make(chan *nsq.Message, 100)
-	lookup := "10.238.154.138:4150"
+	//lookup := "10.238.154.138:4150"
+	lookup := "localhost:4150"
 	//lookup := "ec2-50-17-119-19.compute-1.amazonaws.com:4161"
 	conf := nsq.NewConfig()
 	//conf.Set("maxInFlight", 1000)
 	conf.MaxInFlight = 1000
 	conf.MsgTimeout = 10 * time.Second
-	cluster = gocql.NewCluster("10.152.146.16")
+	//cluster = gocql.NewCluster("10.152.146.16")
+	cluster = gocql.NewCluster("localhost")
 	cluster.Keyspace = "tick"
 	cluster.Consistency = gocql.One
 	cluster.Timeout = 1 * time.Second
