@@ -1,11 +1,3 @@
- truncate assetid;
- truncate event;
- truncate expirationdate;
- truncate source;
- truncate type;
  truncate dist_over_time;
  truncate distribution;
- truncate eventts;
- truncate section;
  truncate total_events;
- truncate url;

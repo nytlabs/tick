@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/bitly/go-nsq"
@@ -61,14 +60,17 @@ func loop(inChan chan *nsq.Message) {
 				continue
 			}
 			for k, v := range unmarshaled {
-				if !strings.ContainsAny(k, "  .") {
-					//fmt.Println(reflect.TypeOf(v).Name())
-					distChan <- distMsg{k, reflect.TypeOf(v).Name()}
-					tsChan <- struct {
-						k string
-						v interface{}
-					}{k, v}
+				typStr := "null"
+				//fmt.Println(reflect.TypeOf(v).Name())
+				typ := reflect.TypeOf(v)
+				if typ != nil {
+					typStr = typ.Name()
 				}
+				distChan <- distMsg{k, typStr}
+				tsChan <- struct {
+					k string
+					v interface{}
+				}{k, v}
 
 			}
 			count++
@@ -134,7 +136,7 @@ func insertTotal(inChan chan string) {
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, v := range insertmap {
-				err := session.Query("UPDATE tick.total_events set count=count+? WHERE type=?", v, k).Exec()
+				err := session.Query("UPDATE tick.total_events set count=count+? WHERE stream=?", v, k).Exec()
 				if err != nil {
 					log.Println(k + " : Is the EOF here?")
 					log.Println(err)
@@ -182,7 +184,7 @@ func updateDistribution(inChan chan distMsg) {
 			//loop through map and insert data here
 			for k, v := range insertmap {
 				// get current minute
-				err := session.Query("UPDATE tick.distribution set count=count+?, typ_bool_count=typ_bool_count+?, typ_str_count=typ_str_count+?, typ_num_count=typ_num_count+? WHERE key=?", v.count, v.typ_bool, v.typ_string, v.typ_number, k).Exec()
+				err := session.Query("UPDATE tick.distribution set count=count+?, typ_bool_count=typ_bool_count+?, typ_str_count=typ_str_count+?, typ_num_count=typ_num_count+? WHERE key=? and stream=?", v.count, v.typ_bool, v.typ_string, v.typ_number, k, *stream).Exec()
 				if err != nil {
 					log.Println(err)
 				} else {
