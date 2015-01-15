@@ -10,29 +10,6 @@ import (
 	"github.com/gocql/gocql"
 )
 
-type distResponse struct {
-	TotalEvents int64 `json:"total_events"`
-	Keys        []key `json:"keys"`
-}
-
-type key struct {
-	Key      string   `json:"key"`
-	Count    int64    `json:"count"`
-	Percent  float64  `json:"percent_appears"`
-	TypeInfo typeInfo `json:"type_info"`
-}
-
-type typeInfo struct {
-	B typeCount `json:"boolean"`
-	N typeCount `json:"number"`
-	S typeCount `json:"string"`
-}
-
-type typeCount struct {
-	Count   int64   `json:"count"`
-	Percent float64 `json:"percent"`
-}
-
 var session *gocql.Session
 
 func main() {
@@ -53,6 +30,28 @@ func main() {
 	http.ListenAndServe(":8888", nil)
 }
 func getDistribution(w http.ResponseWriter, r *http.Request) {
+
+	type typeCount struct {
+		Count   int64   `json:"count"`
+		Percent float64 `json:"percent"`
+	}
+	type typeInfo struct {
+		B typeCount `json:"boolean"`
+		N typeCount `json:"number"`
+		S typeCount `json:"string"`
+	}
+
+	type key struct {
+		Key      string   `json:"key"`
+		Count    int64    `json:"count"`
+		Percent  float64  `json:"percent_appears"`
+		TypeInfo typeInfo `json:"type_info"`
+	}
+
+	type distResponse struct {
+		TotalEvents int64 `json:"total_events"`
+		Keys        []key `json:"keys"`
+	}
 	var total, c, bc, nc, sc int64 //counts
 	var k string                   //key or attribute in the distribution
 	var kl []key                   //list of keys

@@ -10,7 +10,7 @@ import (
 
 func main() {
 	conf := nsq.NewConfig()
-	w, _ := nsq.NewProducer("127.0.0.1:4150", conf)
+	w, _ := nsq.NewProducer("127.0.0.1:5150", conf)
 	defer w.Stop()
 
 	req, err := http.NewRequest("GET", "https://stream.datasift.com/ae6fadbd4b28204993ecba9b46aee379", nil)

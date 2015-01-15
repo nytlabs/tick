@@ -85,13 +85,14 @@ func insertData(inChan chan struct {
 	k string
 	v interface{}
 }) {
-
-	//tick := time.NewTicker(5000 * time.Millisecond)
+	var val string
+	tick := time.NewTicker(10000 * time.Millisecond)
 	var insertmap map[string]map[string]int
 	insertmap = make(map[string]map[string]int)
+	batch := gocql.NewBatch(gocql.CounterBatch)
+	stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND stream=? AND attr_name=? AND attr_value=?"
 	//count := 0
 	for {
-		val := ""
 		select {
 		case m := <-inChan:
 			//fmt.Println(m.k, m.v)
@@ -105,7 +106,7 @@ func insertData(inChan chan struct {
 			case string:
 				val = j
 			default:
-				//do not worry about this
+				val = "" //do not worry about this
 			}
 
 			var ok bool
@@ -120,8 +121,26 @@ func insertData(inChan chan struct {
 
 				}
 			}
+		case <-tick.C:
+			for k, values := range insertmap {
+				for v, c := range values {
+					//get current minute
+					now := time.Now()
+					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+					batch.Query(stmt, c, t, *stream, k, v)
+					//delete(values, v)
+				}
+				//delete(insertmap, k)
+			}
+			err := session.ExecuteBatch(batch)
+			if err != nil {
+				// if error than lose 10 seconds worth of data --shudder--
+				log.Println(err)
+			}
+			// re-initialize insertmap and batch
+			batch = gocql.NewBatch(gocql.CounterBatch)
+			insertmap = make(map[string]map[string]int)
 		}
-
 	}
 }
 
@@ -215,7 +234,7 @@ func main() {
 
 	inChan := make(chan *nsq.Message, 100)
 	//lookup := "10.238.154.138:4150"
-	lookup := "localhost:4150"
+	lookup := "localhost:5150"
 	//lookup := "ec2-50-17-119-19.compute-1.amazonaws.com:4161"
 	conf := nsq.NewConfig()
 	//conf.Set("maxInFlight", 1000)
