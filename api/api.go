@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/bmizerany/pat"
 	"github.com/gocql/gocql"
@@ -17,6 +18,7 @@ func main() {
 	mux := pat.New()
 	mux.Get("/", http.HandlerFunc(namaste))
 	mux.Get("/distribution/:stream", http.HandlerFunc(getDistribution))
+	mux.Get("/timeseries/:stream", http.HandlerFunc(getTimeSeries))
 	http.Handle("/", mux)
 	cluster := gocql.NewCluster("localhost")
 	cluster.Keyspace = "tick"
@@ -30,7 +32,6 @@ func main() {
 	http.ListenAndServe(":8888", nil)
 }
 func getDistribution(w http.ResponseWriter, r *http.Request) {
-
 	type typeCount struct {
 		Count   int64   `json:"count"`
 		Percent float64 `json:"percent"`
@@ -88,6 +89,37 @@ func getDistribution(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(b)
 	//w.Write([]byte("Hello " + name))
+}
+
+func getTimeSeries(w http.ResponseWriter, r *http.Request) {
+	/*
+		type count struct {
+			Ts    string
+			Count int64
+		}
+	*/
+	var ts time.Time
+	var timeSeries []map[string]int64
+	var c int64
+	const layout = "Jan 2, 2006 at 3:04pm (MST)"
+	params := r.URL.Query()
+	stream := params.Get(":stream")
+	key := params.Get("key")
+	val := params.Get("value")
+	fmt.Println(stream + " " + key + "  " + val)
+	iter := *session.Query(`SELECT event_time, count FROM dist_over_time WHERE stream=? AND attr_name=? AND attr_value=?`, stream, key, val).Iter()
+	for iter.Scan(&ts, &c) {
+		timeElem := make(map[string]int64)
+		//count := count{ts.Format(layout), c}
+		timeElem[ts.Format(layout)] = c
+		timeSeries = append(timeSeries, timeElem)
+	}
+	b, err := json.Marshal(timeSeries)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write(b)
 }
 
 func namaste(w http.ResponseWriter, r *http.Request) {
