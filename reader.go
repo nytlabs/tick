@@ -126,7 +126,7 @@ func insertData(inChan chan struct {
 				for v, c := range values {
 					//get current minute
 					now := time.Now()
-					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
+					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.Local)
 					batch.Query(stmt, c, t, *stream, k, v)
 					//delete(values, v)
 				}

@@ -92,14 +92,14 @@ func getDistribution(w http.ResponseWriter, r *http.Request) {
 }
 
 func getTimeSeries(w http.ResponseWriter, r *http.Request) {
-	/*
-		type count struct {
-			Ts    string
-			Count int64
-		}
-	*/
+	type count struct {
+		Ts    int64 `json:"time"`
+		Count int64 `json:"count"`
+	}
+
 	var ts time.Time
-	var timeSeries []map[string]int64
+	//var timeSeries []map[string]int64
+	var timeSeries []count
 	var c int64
 	const layout = "Jan 2, 2006 at 3:04pm (MST)"
 	params := r.URL.Query()
@@ -109,9 +109,9 @@ func getTimeSeries(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(stream + " " + key + "  " + val)
 	iter := *session.Query(`SELECT event_time, count FROM dist_over_time WHERE stream=? AND attr_name=? AND attr_value=?`, stream, key, val).Iter()
 	for iter.Scan(&ts, &c) {
-		timeElem := make(map[string]int64)
-		//count := count{ts.Format(layout), c}
-		timeElem[ts.Format(layout)] = c
+		//timeElem := make(map[string]int64)
+		timeElem := count{ts.Unix() * 1000, c}
+		//timeElem[ts.Format(layout)] = c
 		timeSeries = append(timeSeries, timeElem)
 	}
 	b, err := json.Marshal(timeSeries)
@@ -119,6 +119,7 @@ func getTimeSeries(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(b)
 }
 
