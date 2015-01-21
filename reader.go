@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
+	//"fmt"
 	"log"
+	"reflect"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/bitly/go-nsq"
@@ -20,19 +20,31 @@ var session *gocql.Session
 var stream *string
 var keymap map[string]bool
 
+type distMsg struct {
+	key string
+	typ string
+}
+
+type distCount struct {
+	count      int
+	typ_number int
+	typ_bool   int
+	typ_string int
+}
+
 func loop(inChan chan *nsq.Message) {
 	count := 0
 	unmarshaled := make(map[string]interface{})
-	outChan := make(chan string, 100)
-	countChan := make(chan string, 100)
+	distChan := make(chan distMsg, 1000)
+	countChan := make(chan string, 1000)
 	tsChan := make(chan struct {
 		k string
 		v interface{}
-	}, 100)
-	go insertMap(outChan)
+	})
+	go updateDistribution(distChan)
 	go insertTotal(countChan)
 	go insertData(tsChan)
-	tick := time.NewTicker(30 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case m := <-inChan:
@@ -48,19 +60,23 @@ func loop(inChan chan *nsq.Message) {
 				continue
 			}
 			for k, v := range unmarshaled {
-				if !strings.ContainsAny(k, "  .") {
-					outChan <- k
-					tsChan <- struct {
-						k string
-						v interface{}
-					}{k, v}
+				typStr := "null"
+				//fmt.Println(reflect.TypeOf(v).Name())
+				typ := reflect.TypeOf(v)
+				if typ != nil {
+					typStr = typ.Name()
 				}
-			}
+				distChan <- distMsg{k, typStr}
+				tsChan <- struct {
+					k string
+					v interface{}
+				}{k, v}
 
+			}
 			count++
 			m.Finish()
 		case <-tick.C:
-			fmt.Printf("read %d events\n", count)
+			log.Printf("read %d events\n", count)
 		}
 	}
 }
@@ -69,12 +85,14 @@ func insertData(inChan chan struct {
 	k string
 	v interface{}
 }) {
-
-	tick := time.NewTicker(60 * time.Second)
+	var val string
+	tick := time.NewTicker(10000 * time.Millisecond)
 	var insertmap map[string]map[string]int
 	insertmap = make(map[string]map[string]int)
+	batch := gocql.NewBatch(gocql.CounterBatch)
+	stmt := "UPDATE tick.dist_over_time set count=count+? WHERE event_time=? AND stream=? AND attr_name=? AND attr_value=?"
+	//count := 0
 	for {
-		val := ""
 		select {
 		case m := <-inChan:
 			//fmt.Println(m.k, m.v)
@@ -88,8 +106,9 @@ func insertData(inChan chan struct {
 			case string:
 				val = j
 			default:
-				//do not worry about this
+				val = "" //do not worry about this
 			}
+
 			var ok bool
 			if val != "" {
 				_, ok = insertmap[m.k]
@@ -102,35 +121,31 @@ func insertData(inChan chan struct {
 
 				}
 			}
-
 		case <-tick.C:
-			//loop through map and insert data here
 			for k, values := range insertmap {
-				//fmt.Println(k, "=>", values)
 				for v, c := range values {
 					//get current minute
 					now := time.Now()
-					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.UTC)
-
-					err := session.Query("UPDATE tick."+k+" set count=count+? WHERE event_time=? AND key=?", c, t, v).Exec()
-					if err != nil {
-						log.Println(k + " : Is the EOF here?")
-						log.Println(err)
-					} else {
-						delete(values, v)
-					}
+					t := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, time.Local)
+					batch.Query(stmt, c, t, *stream, k, v)
+					//delete(values, v)
 				}
-				delete(insertmap, k)
+				//delete(insertmap, k)
 			}
-			fmt.Println("looped through a bunch of keys")
-
+			err := session.ExecuteBatch(batch)
+			if err != nil {
+				// if error than lose 10 seconds worth of data --shudder--
+				log.Println(err)
+			}
+			// re-initialize insertmap and batch
+			batch = gocql.NewBatch(gocql.CounterBatch)
+			insertmap = make(map[string]map[string]int)
 		}
-
 	}
 }
 
 func insertTotal(inChan chan string) {
-	tick := time.NewTicker(30 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	var insertmap map[string]int
 	insertmap = make(map[string]int)
 	for {
@@ -140,7 +155,7 @@ func insertTotal(inChan chan string) {
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, v := range insertmap {
-				err := session.Query("UPDATE tick.total_events set count=count+? WHERE type=?", v, k).Exec()
+				err := session.Query("UPDATE tick.total_events set count=count+? WHERE stream=?", v, k).Exec()
 				if err != nil {
 					log.Println(k + " : Is the EOF here?")
 					log.Println(err)
@@ -153,34 +168,46 @@ func insertTotal(inChan chan string) {
 	}
 }
 
-func insertMap(inChan chan string) {
+func updateDistribution(inChan chan distMsg) {
 	tick := time.NewTicker(10 * time.Second)
-	var insertmap map[string]int
-	insertmap = make(map[string]int)
+	var insertmap map[string]distCount
+	insertmap = make(map[string]distCount)
 	for {
 		select {
 		case m := <-inChan:
-			insertmap[m] = insertmap[m] + 1
+			_, ok := insertmap[m.key]
+			if !ok {
+				switch m.typ {
+				case "string":
+					insertmap[m.key] = distCount{1, 0, 0, 1}
+				case "bool":
+					insertmap[m.key] = distCount{1, 0, 1, 0}
+				case "float64":
+					insertmap[m.key] = distCount{1, 1, 0, 0}
+				default:
+					insertmap[m.key] = distCount{1, 0, 0, 0}
+				}
+			} else {
+				switch m.typ {
+				case "string":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool, insertmap[m.key].typ_string + 1}
+				case "bool":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool + 1, insertmap[m.key].typ_string}
+				case "float64":
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number + 1, insertmap[m.key].typ_bool, insertmap[m.key].typ_string}
+				default:
+					insertmap[m.key] = distCount{insertmap[m.key].count + 1, insertmap[m.key].typ_number, insertmap[m.key].typ_bool, insertmap[m.key].typ_string}
+				}
+			}
 		case <-tick.C:
 			//loop through map and insert data here
 			for k, v := range insertmap {
 				// get current minute
-				err := session.Query("UPDATE tick.distribution set count=count+? WHERE key=?", v, k).Exec()
+				err := session.Query("UPDATE tick.distribution set count=count+?, typ_bool_count=typ_bool_count+?, typ_str_count=typ_str_count+?, typ_num_count=typ_num_count+? WHERE key=? and stream=?", v.count, v.typ_bool, v.typ_string, v.typ_number, k, *stream).Exec()
 				if err != nil {
 					log.Println(err)
 				} else {
 					delete(insertmap, k)
-
-					_, exists := keymap[k]
-					if !exists {
-						keymap[k] = true
-						fmt.Println("Creating Table: " + k)
-						err := session.Query("CREATE TABLE IF NOT EXISTS " + k + " (key text, event_time timestamp, count counter, PRIMARY KEY(key, event_time))").Exec()
-						if err != nil {
-							log.Println("Could Not create table: " + k)
-							log.Println(err)
-						}
-					}
 				}
 			}
 		}
@@ -205,13 +232,16 @@ func main() {
 	}
 	keymap = make(map[string]bool)
 
-	inChan := make(chan *nsq.Message, 1000)
-	lookup := "10.238.154.138:4150"
+	inChan := make(chan *nsq.Message, 100)
+	//lookup := "10.238.154.138:4150"
+	lookup := "localhost:5150"
 	//lookup := "ec2-50-17-119-19.compute-1.amazonaws.com:4161"
 	conf := nsq.NewConfig()
 	//conf.Set("maxInFlight", 1000)
 	conf.MaxInFlight = 1000
-	cluster = gocql.NewCluster("10.152.146.16")
+	conf.MsgTimeout = 10 * time.Second
+	//cluster = gocql.NewCluster("10.152.146.16")
+	cluster = gocql.NewCluster("localhost")
 	cluster.Keyspace = "tick"
 	cluster.Consistency = gocql.One
 	cluster.Timeout = 1 * time.Second
